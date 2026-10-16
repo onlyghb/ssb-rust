@@ -51,8 +51,14 @@ def main():
 
         def run(*command, check=True):
             print("RUN:", " ".join(command), flush=True)
-            # The CLI emits UTF-8 even when Windows defaults to another code page.
-            result = subprocess.run([str(ssb), "--dir", str(base), *command], capture_output=True, encoding="utf-8", timeout=90)
+            # A detached Windows core can retain inherited capture pipes. Files
+            # let us wait for the CLI itself and decode its UTF-8 output directly.
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                result = subprocess.run([str(ssb), "--dir", str(base), *command], stdout=stdout, stderr=stderr, timeout=90)
+                stdout.seek(0)
+                stderr.seek(0)
+                result.stdout = stdout.read().decode("utf-8")
+                result.stderr = stderr.read().decode("utf-8")
             if check and result.returncode:
                 raise AssertionError(f"{command}:\n{result.stdout}\n{result.stderr}")
             return result
