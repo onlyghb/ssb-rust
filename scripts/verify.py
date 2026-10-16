@@ -50,7 +50,9 @@ def main():
         base = Path(base)
 
         def run(*command, check=True):
-            result = subprocess.run([str(ssb), "--dir", str(base), *command], capture_output=True, text=True, timeout=90)
+            print("RUN:", " ".join(command), flush=True)
+            # The CLI emits UTF-8 even when Windows defaults to another code page.
+            result = subprocess.run([str(ssb), "--dir", str(base), *command], capture_output=True, encoding="utf-8", timeout=90)
             if check and result.returncode:
                 raise AssertionError(f"{command}:\n{result.stdout}\n{result.stderr}")
             return result

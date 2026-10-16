@@ -55,6 +55,7 @@ jobs:
                           archive.extract(entry, 'smoke', filter='data')
           PY
       - name: Verify real core with TUN disabled
+        timeout-minutes: 5
         shell: bash
         run: python scripts/verify.py --ssb target/debug/ssb${{ matrix.os == 'windows' && '.exe' || '' }} --core smoke/data/sing-box${{ matrix.os == 'windows' && '.exe' || '' }}
 
