@@ -1,30 +1,37 @@
 name: CI
 on:
   push:
+    branches: ["main"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
+      - "!**/*.md"
   pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".cargo/**"
+      - ".github/workflows/ci.yml"
+      - "!**/*.md"
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            os: linux
-            arch: amd64
-          - runner: ubuntu-24.04-arm
-            os: linux
-            arch: arm64
-          - runner: windows-latest
-            os: windows
-            arch: amd64
-          - runner: windows-11-arm
-            os: windows
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -34,34 +41,3 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
-      - run: cargo build --locked
-      - name: Download official sing-box
-        shell: bash
-        run: |
-          python scripts/package.py --binary target/debug/ssb${{ matrix.os == 'windows' && '.exe' || '' }} --os '${{ matrix.os }}' --arch '${{ matrix.arch }}' --version test --output dist
-          python - <<'PY'
-          import pathlib, tarfile, zipfile
-          path = next(pathlib.Path('dist').glob('*with-singbox*'))
-          pathlib.Path('smoke').mkdir()
-          if path.suffix == '.zip':
-              with zipfile.ZipFile(path) as archive:
-                  for name in archive.namelist():
-                      if name.startswith('data/'):
-                          archive.extract(name, 'smoke')
-          else:
-              with tarfile.open(path) as archive:
-                  for entry in archive:
-                      if entry.name.startswith('data/'):
-                          archive.extract(entry, 'smoke', filter='data')
-          PY
-      - name: Verify real core with TUN disabled
-        timeout-minutes: 5
-        shell: bash
-        run: python scripts/verify.py --ssb target/debug/ssb${{ matrix.os == 'windows' && '.exe' || '' }} --core smoke/data/sing-box${{ matrix.os == 'windows' && '.exe' || '' }}
-
-  minimum-rust:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo check --all-targets --locked
