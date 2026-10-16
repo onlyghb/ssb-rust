@@ -1,0 +1,79 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            os: linux
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+          - runner: windows-latest
+            os: windows
+            arch: amd64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            os: windows
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native musl compiler
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo test --locked
+      - name: Build and package
+        shell: bash
+        run: |
+          export SSB_VERSION="${GITHUB_REF_NAME#v}"
+          if [ '${{ matrix.os }}' = linux ]; then
+            export CC=musl-gcc
+          fi
+          cargo build --release --locked --target '${{ matrix.target }}'
+          python scripts/package.py --binary target/${{ matrix.target }}/release/ssb${{ matrix.os == 'windows' && '.exe' || '' }} --os '${{ matrix.os }}' --arch '${{ matrix.arch }}' --version "$SSB_VERSION" --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssb-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz *.zip > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            支持 Linux / Windows，amd64 / arm64，提供 TUI 与 CLI。
+            - 实时搜索节点、订阅和设置，自适应详情区。
+            - 节点导入、订阅更新、自动测速及域名分流。
+            - 设置校验失败保留原配置，支持 sing-box 1.14。
+
+            精简包运行 `ssb install` 下载内核；`with-singbox` 完整包附带 sing-box 1.14.3。
+            TUN 需要 Linux root/CAP_NET_ADMIN 或 Windows 管理员权限。
+            附带的 sing-box 官方二进制遵循 GPL-3.0，版权归 SagerNet；对应源码：https://github.com/SagerNet/sing-box/tree/v1.14.3。
+          files: dist/*

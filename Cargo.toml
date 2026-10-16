@@ -1,0 +1,37 @@
+[package]
+name = "ssb"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Portable sing-box node and subscription manager"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+crossterm = "0.28"
+flate2 = "1"
+fs2 = "0.4"
+percent-encoding = "2"
+rand = "0.8"
+ratatui = "0.29"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tar = "0.4"
+tempfile = "3"
+url = "2"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

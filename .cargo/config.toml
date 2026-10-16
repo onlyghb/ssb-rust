@@ -1,0 +1,3 @@
+# Keep Windows MSVC release packages self-contained, including the C runtime.
+[target.'cfg(target_env = "msvc")']
+rustflags = ["-C", "target-feature=+crt-static"]
