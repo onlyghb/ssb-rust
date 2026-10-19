@@ -199,6 +199,8 @@ fn config_capabilities_matrix_covers_ipv6_modes_dashboard_and_routes() {
             for mode in ["rule", "global"] {
                 for dashboard in [false, true] {
                     let mut st = State::default();
+                    st.manual_nodes
+                        .push(link::parse("trojan://p@proxy.test:443#test").unwrap());
                     let s = &mut st.settings;
                     s.ipv6 = ipv6.into();
                     s.route_mode = mode.into();
@@ -210,7 +212,7 @@ fn config_capabilities_matrix_covers_ipv6_modes_dashboard_and_routes() {
                         cfg["inbounds"][0]["address"].as_array().unwrap().len(),
                         if v6 { 2 } else { 1 }
                     );
-                    assert_eq!(cfg["inbounds"][0]["strict_route"], v6);
+                    assert_eq!(cfg["inbounds"][0]["strict_route"], true);
                     assert!(cfg["inbounds"][0].get("auto_redirect").is_none());
                     assert_eq!(
                         cfg.get("http_clients").is_some(),
@@ -223,6 +225,10 @@ fn config_capabilities_matrix_covers_ipv6_modes_dashboard_and_routes() {
                     if !v6 {
                         assert_eq!(cfg["inbounds"][0]["route_address"], json!(["0.0.0.0/0"]));
                         assert_eq!(cfg["dns"]["rules"][0]["action"], "predefined");
+                        assert_eq!(
+                            cfg["route"]["rules"][0],
+                            json!({"ip_version":6,"action":"reject"})
+                        );
                     }
                 }
             }
@@ -234,6 +240,8 @@ fn custom_routing_dns_priority_mirrors_and_explicit_download_detour() {
     let tmp = tempfile::tempdir().unwrap();
     let d = Dirs::new(tmp.path()).unwrap();
     let mut st = State::default();
+    st.manual_nodes
+        .push(link::parse("trojan://p@proxy.test:443#test").unwrap());
     let s = &mut st.settings;
     s.custom_proxy = vec!["a.com".into(), ".cn".into()];
     s.custom_direct = vec!["b.com".into()];
@@ -267,7 +275,7 @@ fn custom_routing_dns_priority_mirrors_and_explicit_download_detour() {
         .starts_with(render::RULESET_CDN));
 }
 #[test]
-fn no_nodes_and_disabled_inbounds_still_have_working_direct_and_mixed() {
+fn no_nodes_config_rejects_connections_and_dns_before_direct_rules() {
     let tmp = tempfile::tempdir().unwrap();
     let d = Dirs::new(tmp.path()).unwrap();
     let mut st = State::default();
@@ -282,7 +290,8 @@ fn no_nodes_and_disabled_inbounds_still_have_working_direct_and_mixed() {
     assert_eq!(c["dns"]["servers"][1]["server"], "1.1.1.1");
     assert_eq!(c["dns"]["servers"][1]["server_port"], 8443);
     assert_eq!(c["dns"]["servers"][1]["path"], "/custom-dns");
-    assert!(c["dns"].get("rules").is_none());
+    assert_eq!(c["route"]["rules"][0], json!({"action":"reject"}));
+    assert_eq!(c["dns"]["rules"][0], json!({"action":"reject"}));
     assert_eq!(c["dns"]["reverse_mapping"], true);
 }
 #[test]
@@ -312,6 +321,8 @@ fn doh_urls_keep_queries_normalize_ipv6_and_preserve_fakeip_types() {
     let tmp = tempfile::tempdir().unwrap();
     let d = Dirs::new(tmp.path()).unwrap();
     let mut st = State::default();
+    st.manual_nodes
+        .push(link::parse("trojan://p@proxy.test:443#test").unwrap());
     for (input, host, path) in [
         (
             "https://dns.example.com/?token=abc",

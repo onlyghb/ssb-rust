@@ -77,7 +77,18 @@ impl App {
         tmp.persist(self.dirs.config())
             .map_err(|e| e.error)
             .context("替换 config.json 失败，旧配置仍保留在 .bak")?;
-        Ok(warning)
+        if self.state.all_nodes().is_empty() {
+            Ok(format!(
+                "没有可用代理节点：已生成阻断配置，请先添加节点或订阅后启动{}",
+                if warning.is_empty() {
+                    String::new()
+                } else {
+                    format!("；{warning}")
+                }
+            ))
+        } else {
+            Ok(warning)
+        }
     }
     pub fn add_nodes(&mut self, text: &str) -> Result<(usize, Vec<String>)> {
         let (nodes, errors) = link::parse_mixed(text);
@@ -230,7 +241,14 @@ impl App {
             }
         }
     }
+    fn require_nodes(&self) -> Result<()> {
+        if self.state.all_nodes().is_empty() {
+            bail!("没有可用代理节点，已拒绝启动或切换出口以避免直连；请先添加节点或订阅");
+        }
+        Ok(())
+    }
     pub fn start(&self) -> Result<()> {
+        self.require_nodes()?;
         if let Some(pid) = core::running(&self.dirs) {
             bail!("sing-box 已在运行 (pid {pid})");
         }
@@ -248,12 +266,15 @@ impl App {
         core::stop(&self.dirs)
     }
     pub fn restart(&self) -> Result<()> {
+        // Check before stopping a running core that still has its previous nodes.
+        self.require_nodes()?;
         if core::running(&self.dirs).is_some() {
             self.stop()?;
         }
         self.start()
     }
     pub fn run_core(&self) -> Result<()> {
+        self.require_nodes()?;
         let bin = self.ensure_binary()?;
         if self.state.settings.tun_enabled && !platform::has_tun_privilege(&bin) {
             bail!("{}", platform::privilege_hint(&bin));
@@ -269,6 +290,7 @@ impl App {
         platform::foreground(&mut cmd)
     }
     pub fn select_node(&self, tag: &str) -> Result<()> {
+        self.require_nodes()?;
         if core::running(&self.dirs).is_none() {
             bail!("sing-box 未运行，请先启动");
         }

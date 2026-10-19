@@ -172,6 +172,7 @@ fn fake_core(a: &mut App, script: &str) -> std::path::PathBuf {
 fn generation_checks_before_replacing_and_keeps_backup_on_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let mut a = App::open(tmp.path()).unwrap();
+    a.add_nodes("trojan://p@proxy.test:443#test").unwrap();
     fake_core(
         &mut a,
         "#!/bin/sh\necho 'WARN compatibility warning' >&2\nexit 0\n",
@@ -194,6 +195,59 @@ fn generation_checks_before_replacing_and_keeps_backup_on_failure() {
         .file_name()
         .to_string_lossy()
         .starts_with("config-")));
+}
+#[test]
+fn empty_nodes_cannot_start_restart_run_or_select_direct() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = App::open(tmp.path()).unwrap();
+    a.state.settings.singbox_path = tmp.path().join("must-not-execute").to_string_lossy().into();
+    // Ignore legacy/null outbound entries when deciding whether a proxy exists.
+    a.state.manual_nodes.push(
+        serde_json::from_value(serde_json::json!({"tag":"invalid","outbound":null})).unwrap(),
+    );
+    for result in [
+        a.start(),
+        a.restart(),
+        a.run_core(),
+        a.select_node("direct"),
+    ] {
+        assert!(result.unwrap_err().to_string().contains("没有可用代理节点"));
+    }
+    assert!(!a.dirs.binary().exists());
+    assert!(!a.dirs.config().exists());
+    assert!(!a.dirs.pid().exists());
+}
+#[cfg(target_os = "linux")]
+#[test]
+fn empty_node_restart_preserves_the_existing_core() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = App::open(tmp.path()).unwrap();
+    a.dirs.ensure().unwrap();
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let info = ssb::platform::process_info(child.id()).unwrap();
+    std::fs::write(a.dirs.pid(), child.id().to_string()).unwrap();
+    std::fs::write(
+        a.dirs.base.join("run/sing-box.process.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"pid":child.id(),"identity":info.identity,"image":info.image}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let was_running = core::running(&a.dirs) == Some(child.id());
+    let result = a.restart();
+    let survived = child.try_wait().unwrap().is_none();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(was_running);
+    assert!(result.unwrap_err().to_string().contains("没有可用代理节点"));
+    assert!(
+        survived,
+        "empty-node restart stopped the previous core before validation"
+    );
 }
 #[cfg(unix)]
 #[test]

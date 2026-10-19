@@ -79,6 +79,11 @@ def main():
             assert "WARN" not in result.stderr, result.stderr
             original = (base / "data/config.json").read_bytes()
             assert json.loads(original)["inbounds"][0]["type"] == "mixed"
+            assert json.loads(original)["route"]["rules"][0]["action"] == "reject"
+            rejected = run("start", check=False)
+            assert rejected.returncode and "没有可用代理节点" in rejected.stderr
+            bootstrap = "vless://00000000-0000-4000-8000-000000000002@127.0.0.1:65530?security=tls#smoke-bootstrap"
+            run("add", bootstrap)
             run("start")
             status = run("status").stdout
             assert "运行中" in status and "API 服务: 可达" in status, status
@@ -96,6 +101,7 @@ def main():
             run("stop")
             assert "未运行" in run("status").stdout
             assert not (base / "run/sing-box.pid").exists()
+            run("nodes", "rm", "smoke-bootstrap")
 
             run("add", "vless://00000000-0000-4000-8000-000000000001@127.0.0.1:65531?security=tls#manual")
             run("sub", "add", local_url + "/sub", "fixture")
@@ -121,6 +127,7 @@ def main():
             assert "FATAL" not in log and "WARN" not in log, log
 
             if args.downloads:
+                run("add", bootstrap)
                 run("settings", "set", "route_mode", "rule")
                 run("settings", "set", "dashboard_off", "false")
                 run("start")

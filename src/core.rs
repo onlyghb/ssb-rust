@@ -359,7 +359,7 @@ pub fn stop(d: &Dirs) -> Result<()> {
 fn start_hint(log: &str, bin: &Path) -> String {
     let l = log.to_lowercase();
     if l.contains("address family not supported") {
-        "\n提示：IPv6 策略路由不可用，请设置 IPv6=auto/off，重新 gen 后启动。".into()
+        "\n提示：系统无法安装所需的 IPv6 路由或阻断规则。请检查 IPv6/策略路由支持；为避免绕过代理，不会自动关闭严格路由。也可关闭 TUN，仅使用显式应用代理。".into()
     } else if l.contains("address already in use") || l.contains("only one usage of each socket") {
         format!("\n提示：端口被占用，运行 {SELF} doctor 检查，或更改 mixed/API 端口。")
     } else if l.contains("operation not permitted")
@@ -494,13 +494,13 @@ pub fn doctor(d: &Dirs, st: &State) -> Vec<CheckResult> {
             "IPv6",
             mode != "on" || supported,
             if mode == "off" {
-                "off：仅 IPv4".into()
+                "off：使用 IPv4，拒绝 IPv6 连接".into()
             } else if supported {
                 format!("IPv6 可用（{mode}）")
             } else if mode == "on" {
-                "IPv6/策略路由不可用，请设置 auto/off".into()
+                "IPv6 不可用；使用 auto/off 时，TUN 仍要求系统支持 IPv6 阻断规则".into()
             } else {
-                "IPv6/策略路由不可用，auto 已降级为 IPv4".into()
+                "IPv6 不可用，auto 使用 IPv4；TUN 严格路由仍阻断 IPv6".into()
             },
         );
     }

@@ -315,7 +315,7 @@ fn setting_rows(a: &App) -> Vec<Row> {
         Row {
             key: "ipv6",
             label: "代理 / IPv6",
-            description: "auto 按系统 IPv6/策略路由能力探测；on 强制开启；off 纯 IPv4",
+            description: "auto 探测支持情况；on 接管 IPv6；off 阻断 IPv6；TUN 始终启用严格路由",
             options: &["auto", "on", "off"],
         },
         Row {
@@ -466,10 +466,10 @@ fn setting_display(value: &Value, key: &str) -> String {
 
 // Indices refer to the unfiltered list, so actions always target the displayed row.
 fn node_tags(nodes: &[link::Node]) -> Vec<String> {
-    let mut tags = Vec::new();
-    if !nodes.is_empty() {
-        tags.push("auto".into());
+    if nodes.is_empty() {
+        return vec![];
     }
+    let mut tags = vec!["auto".into()];
     tags.extend(nodes.iter().map(|n| n.tag.clone()));
     tags.push("direct".into());
     tags
@@ -648,10 +648,10 @@ impl Ui {
                 .collect(),
             2 => {
                 let nodes = self.app.state.all_nodes();
-                let mut texts = vec![];
-                if !nodes.is_empty() {
-                    texts.push("auto 自动测速".into());
+                if nodes.is_empty() {
+                    return vec![];
                 }
+                let mut texts = vec!["auto 自动测速".into()];
                 texts.extend(nodes.iter().map(|n| {
                     format!(
                         "{} {} {}",
@@ -931,6 +931,9 @@ impl Ui {
     }
     fn details(&self, compact: bool) -> String {
         let Some(index) = self.selected_index() else {
+            if self.tab == 2 && self.app.state.all_nodes().is_empty() {
+                return "尚无可用代理节点\n\n按 a 添加链接，或到订阅页添加订阅。\n\n无节点时禁止启动，配置会阻断连接和 DNS 查询。".into();
+            }
             return "没有匹配项\n\n按 / 修改搜索，Esc 清除筛选".into();
         };
         match self.tab {
@@ -1014,7 +1017,7 @@ impl Ui {
                     "tun_enabled" => "inbounds[].type = tun",
                     "tun_address" => "inbounds[tun].address",
                     "auto_redirect" => "inbounds[tun].auto_redirect",
-                    "ipv6" => "TUN address / DNS AAAA 查询策略",
+                    "ipv6" => "TUN 严格路由 / IPv6 拒绝规则 / DNS AAAA 策略",
                     "fakeip" => "dns.servers[].type = fakeip",
                     "mixed_enabled" => "inbounds[].type = mixed",
                     "mixed_port" => "inbounds[mixed].listen_port",
@@ -1225,10 +1228,12 @@ impl Ui {
                             link::string(&n.outbound, "server")
                         )));
                     }
-                    items.push(ListItem::new(format!(
-                        "{} direct  直接连接",
-                        marker("direct")
-                    )));
+                    if !nodes.is_empty() {
+                        items.push(ListItem::new(format!(
+                            "{} direct  直接连接",
+                            marker("direct")
+                        )));
+                    }
                 }
                 3 => {
                     let settings = serde_json::to_value(&self.app.state.settings).unwrap();
@@ -1263,7 +1268,11 @@ impl Ui {
             if items.is_empty() {
                 f.render_widget(
                     Paragraph::new(if query.is_empty() {
-                        "还没有订阅，按 a 添加订阅 URL"
+                        if self.tab == 2 {
+                            "没有代理节点，按 a 添加链接或到订阅页添加订阅；无节点时禁止启动"
+                        } else {
+                            "还没有订阅，按 a 添加订阅 URL"
+                        }
                     } else {
                         "没有匹配项，按 / 修改搜索或 Esc 清除筛选"
                     })
@@ -1474,8 +1483,14 @@ mod tests {
     fn empty_nodes_match_selector_and_dirty_config_blocks_selection() {
         let temp = tempfile::tempdir().unwrap();
         let mut ui = Ui::new(App::open(temp.path()).unwrap());
-        assert_eq!(node_tags(&ui.app.state.all_nodes()), vec!["direct"]);
+        assert!(node_tags(&ui.app.state.all_nodes()).is_empty());
         ui.tab = 2;
+        press(&mut ui, KeyCode::Enter);
+        assert!(ui.job.is_none());
+        ui.app
+            .state
+            .manual_nodes
+            .push(link::parse("trojan://p@proxy.test:443#test").unwrap());
         ui.dirty = true;
         press(&mut ui, KeyCode::Enter);
         assert!(ui.job.is_none());

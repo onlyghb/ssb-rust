@@ -70,6 +70,7 @@ pub fn build_for(st: &State, d: &Dirs, host_ipv6: bool, linux: bool) -> Result<V
         _ => host_ipv6,
     };
     let nodes = st.all_nodes();
+    let no_nodes = nodes.is_empty();
     let tags: Vec<&str> = nodes.iter().map(|n| n.tag.as_str()).collect();
     let mut members = vec![];
     if !nodes.is_empty() {
@@ -137,7 +138,10 @@ pub fn build_for(st: &State, d: &Dirs, host_ipv6: bool, linux: bool) -> Result<V
         if v6 {
             addresses.push("fdfe:dcba:9876::1/126");
         }
-        let mut tun = json!({"type":"tun","tag":"tun-in","address":addresses,"mtu":9000,"auto_route":true,"strict_route":v6,"stack":"mixed"});
+        // With no IPv6 TUN address, strict_route installs an IPv6 unreachable
+        // rule on Linux / a blocking WFP filter on Windows. Keep it enabled
+        // independently of DNS/IPv6 preferences; AAAA filtering is not a firewall.
+        let mut tun = json!({"type":"tun","tag":"tun-in","address":addresses,"mtu":9000,"auto_route":true,"strict_route":true,"stack":"mixed"});
         if !v6 {
             tun["route_address"] = json!(["0.0.0.0/0"]);
         }
@@ -149,11 +153,23 @@ pub fn build_for(st: &State, d: &Dirs, host_ipv6: bool, linux: bool) -> Result<V
     if s.mixed_enabled || !s.tun_enabled {
         inbounds.push(json!({"type":"mixed","tag":"mixed-in","listen":"127.0.0.1","listen_port":s.mixed_port}));
     }
-    let mut rules = vec![
+    let mut rules = vec![];
+    if no_nodes {
+        // A selector needs a member even in an inactive configuration. Reject
+        // traffic and DNS before any direct rule, including native TUN DNS.
+        rules.push(json!({"action":"reject"}));
+        dns_rules.insert(0, json!({"action":"reject"}));
+    }
+    if !v6 {
+        // Also covers literal/cached IPv6 addresses submitted to mixed, which
+        // do not go through the DNS AAAA policy or the TUN's system routes.
+        rules.push(json!({"ip_version":6,"action":"reject"}));
+    }
+    rules.extend([
         json!({"action":"sniff"}),
         json!({"protocol":"dns","action":"hijack-dns"}),
         json!({"ip_is_private":true,"outbound":"direct"}),
-    ];
+    ]);
     if !s.custom_proxy.is_empty() {
         rules.push(custom_rule(&s.custom_proxy, "outbound", "PROXY"));
     }

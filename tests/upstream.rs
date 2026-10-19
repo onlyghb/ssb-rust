@@ -20,7 +20,7 @@ fn original_go_node_outputs_match_rust() {
     }
 }
 #[test]
-fn original_go_configs_match_except_documented_dns_fixes() {
+fn original_go_configs_match_except_documented_fixes() {
     let fixture = fixtures();
     let d = Dirs::new("/ssb-parity").unwrap();
     for (i, case) in fixture["configs"].as_array().unwrap().iter().enumerate() {
@@ -52,6 +52,22 @@ fn original_go_configs_match_except_documented_dns_fixes() {
         let mut actual = actual;
         normalized(&mut actual);
         let mut expected = case["config"].clone();
+        let v6 = state.settings.ipv6 == "on"
+            || (state.settings.ipv6 == "auto" && case["host_ipv6"] == true);
+        if let Some(inbounds) = expected["inbounds"].as_array_mut() {
+            for inbound in inbounds
+                .iter_mut()
+                .filter(|inbound| inbound["type"] == "tun")
+            {
+                inbound["strict_route"] = true.into();
+            }
+        }
+        if !v6 {
+            expected["route"]["rules"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, serde_json::json!({"ip_version":6,"action":"reject"}));
+        }
         // Intentional improvement: real-IP DNS retains domains for routing.
         // Keep the immutable Go fixture, while comparing all other fields exactly.
         if !state.settings.fakeip {
@@ -82,6 +98,19 @@ fn original_go_configs_match_except_documented_dns_fixes() {
                 }
                 *rules = migrated;
             }
+        }
+        if state.all_nodes().is_empty() {
+            expected["route"]["rules"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, serde_json::json!({"action":"reject"}));
+            if expected["dns"].get("rules").is_none() {
+                expected["dns"]["rules"] = serde_json::json!([]);
+            }
+            expected["dns"]["rules"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, serde_json::json!({"action":"reject"}));
         }
         normalized(&mut expected);
         assert_eq!(actual, expected, "original Go config case {i}");

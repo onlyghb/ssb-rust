@@ -63,7 +63,8 @@ Windows 命令中的 `./ssb` 替换为 `.\ssb.exe`。
 | `?` | 查看完整帮助 |
 | `q` | 退出界面，内核继续在后台运行 |
 
-订阅可按 `URL 名称` 输入。节点页的 `auto` 自动选择低延迟节点，`direct` 直接连接。
+订阅可按 `URL 名称` 输入。有节点时，节点页的 `auto` 自动选择低延迟节点，`direct` 直接连接。
+无节点时禁止启动内核，生成的配置会阻断连接和 DNS 查询；请先添加节点或订阅。
 宽屏在右侧显示详情，普通尺寸在列表下方显示。输入有误时可直接修正；设置校验失败保留原配置。
 配置有改动时按 `r` 应用，再切换出口。
 
@@ -93,7 +94,8 @@ ssb version | help                      版本与帮助
 - 默认国内域名/IP 直连，其余通过 PROXY；路由模式可选 `rule` / `global`。
 - 自定义分流优先于中国规则。`example.com` 包含自身和子域名，`.cn` 仅匹配后缀。
 - 国内 DNS 使用 IP 地址；代理 DNS 支持 IP、域名或完整 HTTPS DoH URL。
-- IPv6 可选 `auto` / `on` / `off`；`auto` 按系统能力探测。
+- IPv6 可选 `auto` / `on` / `off`；`auto` 按系统能力探测。关闭或降级时，TUN 阻断 IPv6，显式代理也拒绝 IPv6 目标连接。
+- TUN 始终开启严格路由；无法安装所需路由或阻断规则时拒绝启动。
 - 规则集默认从 jsDelivr 直连下载，可切换 GitHub 源或设置镜像前缀。
 - 开启网页面板：`ssb settings set dashboard_off false`，重启后运行 `ssb dashboard` 获取地址和密钥。
 
