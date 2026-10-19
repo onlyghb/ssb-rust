@@ -97,6 +97,43 @@ fn operation_lock_reloads_disk_state_and_rejects_concurrent_writers() {
     b.add_nodes("trojan://p@example.test:443#two").unwrap();
     assert_eq!(App::open(tmp.path()).unwrap().state.manual_nodes.len(), 2);
 }
+#[cfg(target_os = "linux")]
+#[test]
+fn directory_lock_release_does_not_wait_for_an_inheriting_child() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = App::open(tmp.path()).unwrap();
+    let guard = a.lock().unwrap();
+    let mut pipe = [-1; 2];
+    assert_eq!(
+        unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) },
+        0
+    );
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0);
+    if pid == 0 {
+        // Only async-signal-safe calls in the forked, multithreaded child.
+        unsafe {
+            libc::close(pipe[1]);
+            let mut byte = 0u8;
+            libc::read(pipe[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    unsafe {
+        libc::close(pipe[0]);
+    }
+    drop(guard);
+    let reacquired = a.lock();
+    unsafe {
+        libc::write(pipe[1], (&1u8 as *const u8).cast(), 1);
+        libc::close(pipe[1]);
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
+    }
+    assert!(
+        reacquired.is_ok(),
+        "directory remained locked by a child's inherited descriptor"
+    );
+}
 #[test]
 fn removing_disambiguated_manual_nodes_preserves_subscriptions() {
     let tmp = tempfile::tempdir().unwrap();

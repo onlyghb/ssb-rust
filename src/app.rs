@@ -18,6 +18,14 @@ pub struct App {
     pub dirs: Dirs,
     pub state: State,
 }
+pub struct DirectoryLock(fs::File);
+impl Drop for DirectoryLock {
+    fn drop(&mut self) {
+        // Closing alone can leave flock held by a concurrently forked child
+        // until it execs. Release ownership explicitly before closing the file.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
 pub fn resolve_base(flag: Option<&str>) -> Result<PathBuf> {
     if let Some(dir) = flag {
         return Ok(dir.into());
@@ -38,7 +46,7 @@ impl App {
     }
     /// Each mutating CLI command or TUI worker holds this guard. Read-only
     /// status commands remain available while downloads are in progress.
-    pub fn lock(&mut self) -> Result<fs::File> {
+    pub fn lock(&mut self) -> Result<DirectoryLock> {
         self.dirs.ensure()?;
         let lock = fs::OpenOptions::new()
             .create(true)
@@ -48,8 +56,9 @@ impl App {
             .open(self.dirs.base.join("run/ssb.lock"))?;
         lock.try_lock_exclusive()
             .context("另一个 ssb 正在修改此目录，请稍后再试")?;
+        let guard = DirectoryLock(lock);
         self.state = State::load(&self.dirs)?;
-        Ok(lock)
+        Ok(guard)
     }
     pub fn save(&self) -> Result<()> {
         self.state.save(&self.dirs)
