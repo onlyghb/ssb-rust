@@ -6,6 +6,11 @@ use std::{
     time::Duration,
 };
 
+// Forking fixtures can inherit a sibling's temporary executable writer until
+// exec/exit, causing unrelated ETXTBSY errors. Serialize process fixtures.
+#[cfg(unix)]
+static PROCESS_FIXTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn serve_replies(
     replies: Vec<(&'static str, &'static str)>,
 ) -> (String, thread::JoinHandle<Vec<String>>) {
@@ -100,6 +105,7 @@ fn operation_lock_reloads_disk_state_and_rejects_concurrent_writers() {
 #[cfg(target_os = "linux")]
 #[test]
 fn directory_lock_release_does_not_wait_for_an_inheriting_child() {
+    let _process_guard = PROCESS_FIXTURE_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let mut a = App::open(tmp.path()).unwrap();
     let guard = a.lock().unwrap();
@@ -207,6 +213,7 @@ fn fake_core(a: &mut App, script: &str) -> std::path::PathBuf {
 #[cfg(unix)]
 #[test]
 fn generation_checks_before_replacing_and_keeps_backup_on_failure() {
+    let _process_guard = PROCESS_FIXTURE_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let mut a = App::open(tmp.path()).unwrap();
     a.add_nodes("trojan://p@proxy.test:443#test").unwrap();
@@ -257,6 +264,7 @@ fn empty_nodes_cannot_start_restart_run_or_select_direct() {
 #[cfg(target_os = "linux")]
 #[test]
 fn empty_node_restart_preserves_the_existing_core() {
+    let _process_guard = PROCESS_FIXTURE_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let a = App::open(tmp.path()).unwrap();
     a.dirs.ensure().unwrap();
@@ -289,13 +297,14 @@ fn empty_node_restart_preserves_the_existing_core() {
 #[cfg(unix)]
 #[test]
 fn command_timeout_kills_and_reaps_the_child() {
+    let _process_guard = PROCESS_FIXTURE_LOCK.lock().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let mut a = App::open(tmp.path()).unwrap();
     let bin = fake_core(&mut a, "#!/bin/sh\nwhile :; do :; done\n");
     let started = std::time::Instant::now();
     let err = core::command_output(std::process::Command::new(bin), Duration::from_millis(100))
         .unwrap_err();
-    assert!(err.to_string().contains("超时"));
+    assert!(err.to_string().contains("超时"), "{err:#}");
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 #[cfg(target_os = "linux")]
