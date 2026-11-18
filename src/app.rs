@@ -306,6 +306,22 @@ impl App {
         let bin = core::locate(&self.dirs, &self.state.settings)?;
         core::select(&bin, &self.state.settings, tag).context("切换失败；如刚增删节点，请重启内核")
     }
+    pub fn test_delays(&self) -> Result<()> {
+        self.require_nodes()?;
+        if core::running(&self.dirs).is_none() {
+            bail!("sing-box 未运行，请先启动后再测速");
+        }
+        let bin = core::locate(&self.dirs, &self.state.settings)?;
+        core::urltest(&bin, &self.state.settings).context("测速失败；如刚增删节点，请重启内核")
+    }
+    pub fn node_delays(&self) -> std::collections::HashMap<String, u32> {
+        if core::running(&self.dirs).is_none() {
+            return Default::default();
+        }
+        core::locate(&self.dirs, &self.state.settings)
+            .and_then(|bin| core::delays(&bin, &self.state.settings))
+            .unwrap_or_default()
+    }
     pub fn selected_node(&self) -> String {
         if core::running(&self.dirs).is_none() {
             return String::new();

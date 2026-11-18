@@ -366,3 +366,20 @@ fn ipv6_probe_handles_kernel_done_errors() {
     assert_eq!(platform::probe_result(2, &[]), -1);
     assert_ne!(platform::ipv6_rule_supported(), -1, "本地 netlink 探测失败");
 }
+
+#[test]
+fn node_country_codes_come_from_flags_names_and_codes() {
+    use ssb::link::country;
+    assert_eq!(country("🇭🇰 香港 01"), Some("HK"));
+    assert_eq!(country("🇯🇵Tokyo"), Some("JP"));
+    assert_eq!(country("🇨🇳 台湾 02"), Some("TW"));
+    assert_eq!(country("美国洛杉矶 | 1x"), Some("US"));
+    assert_eq!(country("印度尼西亚 01"), Some("ID"));
+    assert_eq!(country("印度 01"), Some("IN"));
+    assert_eq!(country("澳门 01"), Some("MO"));
+    assert_eq!(country("Singapore-Premium"), Some("SG"));
+    assert_eq!(country("HK01-IEPL"), Some("HK"));
+    assert_eq!(country("UK London"), Some("GB"));
+    assert_eq!(country("node in somewhere"), None);
+    assert_eq!(country("sg-01"), None);
+}

@@ -7,6 +7,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -430,6 +431,32 @@ pub fn selected(bin: &Path, s: &Settings) -> Result<String> {
         s,
         &["group", "show", "PROXY"],
     )?))
+}
+/// Parses `group show` member rows (`tag<TAB>type<TAB>123 ms`) into the latest
+/// URL-test delay per tag; untested or failed members print `-` and are omitted.
+pub fn parse_delays(out: &str) -> HashMap<String, u32> {
+    strip_ansi(out)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (tag, _, delay) = (fields.next()?, fields.next()?, fields.next()?);
+            let ms = delay.trim().strip_suffix("ms")?.trim().parse().ok()?;
+            Some((tag.to_string(), ms))
+        })
+        .collect()
+}
+pub fn delays(bin: &Path, s: &Settings) -> Result<HashMap<String, u32>> {
+    Ok(parse_delays(&api_output(
+        bin,
+        s,
+        &["group", "show", "PROXY"],
+    )?))
+}
+/// Spawns a real URL test through every PROXY member; results land in the
+/// core's URL-test history a few seconds later and are read back by `delays`.
+pub fn urltest(bin: &Path, s: &Settings) -> Result<()> {
+    api_output(bin, s, &["group", "urltest", "PROXY"])?;
+    Ok(())
 }
 pub fn select(bin: &Path, s: &Settings, tag: &str) -> Result<()> {
     api_output(bin, s, &["group", "select", "PROXY", tag])?;

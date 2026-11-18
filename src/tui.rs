@@ -18,6 +18,7 @@ use ratatui::{
 };
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     io,
     sync::mpsc::{self, Receiver},
     thread,
@@ -25,7 +26,7 @@ use std::{
 };
 
 const ACCENT: Color = Color::Cyan;
-const HELP: &str = "全局\n  1–4 / Tab / h l     切换状态、订阅、节点、设置\n  j k / ↑ ↓          移动光标；状态页翻日志\n  PgUp PgDn / Home End   翻页 / 首尾\n  /                  搜索当前列表；Enter 保留；Esc 清除筛选\n  s                  启动或停止 sing-box\n  r                  校验配置并重启应用\n  g                  生成并校验配置\n  q / Ctrl-C         退出，sing-box 继续在后台运行\n\n状态页：i 下载内核\n订阅页：a 添加 URL [名称]；Enter/u 更新；U 全部更新；x/Delete 删除\n节点页：a 添加链接；Enter/空格 立即切换出口；x/Delete 删除手动节点\n设置页：Enter/空格 轮转；e 编辑原始值；Backspace 反向轮转\n\n文本编辑：支持粘贴、方向键、Home/End；Ctrl-U 清空；Esc 取消\n设置或节点变更会自动保存和校验配置；运行中按 r 使改动生效\n宽屏右侧显示详情；窄屏在列表下方显示\n\n按 ? / Esc / Enter 返回";
+const HELP: &str = "全局\n  1–4 / Tab / h l     切换状态、订阅、节点、设置\n  j k / ↑ ↓          移动光标；状态页翻日志\n  PgUp PgDn / Home End   翻页 / 首尾\n  /                  搜索当前列表；Enter 保留；Esc 清除筛选\n  s                  启动或停止 sing-box\n  r                  校验配置并重启应用\n  g                  生成并校验配置\n  q / Ctrl-C         退出，sing-box 继续在后台运行\n\n状态页：i 下载内核\n订阅页：a 添加 URL [名称]；Enter/u 更新；U 全部更新；x/Delete 删除\n节点页：a 添加链接；Enter/空格 立即切换出口；t 测试真延迟；x/Delete 删除手动节点\n设置页：Enter/空格 轮转；e 编辑原始值；Backspace 反向轮转\n\n文本编辑：支持粘贴、方向键、Home/End；Ctrl-U 清空；Esc 取消\n设置或节点变更会自动保存和校验配置；运行中按 r 使改动生效\n宽屏右侧显示详情；窄屏在列表下方显示\n\n按 ? / Esc / Enter 返回";
 
 struct TerminalGuard;
 impl Drop for TerminalGuard {
@@ -52,6 +53,7 @@ enum Operation {
     RemoveSub(String),
     RemoveNode(String),
     Select(String),
+    TestDelay,
     Setting(String, String),
 }
 impl Operation {
@@ -79,6 +81,7 @@ impl Operation {
             Self::RemoveSub(_) => "删除订阅",
             Self::RemoveNode(_) => "删除节点",
             Self::Select(_) => "切换出口",
+            Self::TestDelay => "测速",
             Self::Setting(..) => "保存设置",
         }
     }
@@ -101,6 +104,10 @@ impl Operation {
             Self::Select(tag) => {
                 a.select_node(tag)?;
                 format!("出口 → {tag}")
+            }
+            Self::TestDelay => {
+                a.test_delays()?;
+                "测速已开始，结果几秒内刷新".into()
             }
             Self::Generate => "配置已生成".into(),
             Self::AddNodes(text) => {
@@ -190,6 +197,7 @@ struct Snapshot {
     app: App,
     status: String,
     selected: String,
+    delays: HashMap<String, u32>,
 }
 #[derive(Clone)]
 enum InputKind {
@@ -471,8 +479,38 @@ fn node_tags(nodes: &[link::Node]) -> Vec<String> {
     }
     let mut tags = vec!["auto".into()];
     tags.extend(nodes.iter().map(|n| n.tag.clone()));
-    tags.push("direct".into());
     tags
+}
+
+const TESTING: Duration = Duration::from_secs(10);
+
+// Flag emoji widths vary across terminals, so a node's leading flag is shown
+// as its country code badge instead.
+fn display_name(tag: &str) -> &str {
+    let name = tag
+        .trim_start_matches(|c: char| ('\u{1F1E6}'..='\u{1F1FF}').contains(&c))
+        .trim_start();
+    if name.is_empty() {
+        tag
+    } else {
+        name
+    }
+}
+
+fn delay_span(delays: &HashMap<String, u32>, tag: &str, testing: bool) -> Span<'static> {
+    match delays.get(tag) {
+        Some(&ms) => Span::styled(
+            format!("{ms} ms"),
+            Style::default().fg(match ms {
+                0..300 => Color::Green,
+                300..800 => Color::Yellow,
+                _ => Color::Red,
+            }),
+        ),
+        None if testing => Span::styled("测速中…", Style::default().fg(Color::DarkGray)),
+        None if !delays.is_empty() => Span::styled("超时", Style::default().fg(Color::Red)),
+        None => Span::raw(""),
+    }
 }
 
 struct Ui {
@@ -484,6 +522,8 @@ struct Ui {
     log_scroll: usize,
     status: String,
     selected: String,
+    delays: HashMap<String, u32>,
+    testing: Option<Instant>,
     message: String,
     error: bool,
     dirty: bool,
@@ -507,6 +547,8 @@ impl Ui {
             log_scroll: 0,
             status: "正在读取状态…".into(),
             selected: String::new(),
+            delays: HashMap::new(),
+            testing: None,
             message: String::new(),
             error: false,
             dirty: false,
@@ -557,6 +599,7 @@ impl Ui {
                             self.message = format!("{e:#}");
                             self.error = true;
                             self.editor = self.submitted_editor.take();
+                            self.testing = None;
                         }
                     }
                     self.submitted_editor = None;
@@ -586,6 +629,7 @@ impl Ui {
                         self.app = snapshot.app;
                         self.status = snapshot.status;
                         self.selected = snapshot.selected;
+                        self.delays = snapshot.delays;
                     }
                     self.snapshot = None;
                 }
@@ -607,10 +651,12 @@ impl Ui {
                     .find_map(|l| l.strip_prefix("当前出口: "))
                     .unwrap_or_default()
                     .into();
+                let delays = app.node_delays();
                 let _ = tx.send(Snapshot {
                     app,
                     status,
                     selected,
+                    delays,
                 });
             });
             self.snapshot = Some(rx);
@@ -654,13 +700,13 @@ impl Ui {
                 let mut texts = vec!["auto 自动测速".into()];
                 texts.extend(nodes.iter().map(|n| {
                     format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
+                        link::country(&n.tag).unwrap_or_default(),
                         n.tag,
                         link::string(&n.outbound, "type"),
                         link::string(&n.outbound, "server")
                     )
                 }));
-                texts.push("direct 直连".into());
                 texts
                     .into_iter()
                     .enumerate()
@@ -874,6 +920,15 @@ impl Ui {
                         }
                     }
                 }
+                KeyCode::Char('t') => {
+                    if self.dirty {
+                        self.message = "配置尚未应用，请按 r 重启后测速".into();
+                        self.error = true;
+                    } else {
+                        self.testing = Some(Instant::now());
+                        self.launch(Operation::TestDelay);
+                    }
+                }
                 KeyCode::Delete | KeyCode::Char('x') => {
                     let Some(tag) = tag else {
                         return;
@@ -927,6 +982,13 @@ impl Ui {
                     self.launch(Operation::Setting(row.key.into(), row.options[next].into()));
                 }
             }
+        }
+    }
+    fn delay_text(&self, tag: &str) -> String {
+        let testing = self.testing.is_some_and(|t| t.elapsed() < TESTING);
+        match delay_span(&self.delays, tag, testing).content.as_ref() {
+            "" => "未测试（按 t 测速）".into(),
+            text => text.into(),
         }
     }
     fn details(&self, compact: bool) -> String {
@@ -990,20 +1052,21 @@ impl Ui {
                             })
                             .unwrap_or_else(|| "订阅".into())
                     };
+                    let country = link::country(tag).unwrap_or("未知");
+                    let delay = self.delay_text(tag);
+                    let name = display_name(tag);
                     if compact {
                         format!(
-                            "{tag} · {}\n服务器：{} · 端口：{}\n来源：{source}",
+                            "{name} · {}\n地区：{country} · 延迟：{delay}\n服务器：{} · 端口：{}\n来源：{source}",
                             link::string(&n.outbound, "type"),
                             link::string(&n.outbound, "server"),
                             n.outbound["server_port"]
                         )
                     } else {
-                        format!("{tag}\n\n协议：{}\n服务器：{}\n端口：{}\n来源：{source}\n\nEnter / 空格 立即切换\n切换结果由运行中内核保存", link::string(&n.outbound, "type"), link::string(&n.outbound, "server"), n.outbound["server_port"])
+                        format!("{name}\n\n地区：{country}\n延迟：{delay}\n协议：{}\n服务器：{}\n端口：{}\n来源：{source}\n\nEnter / 空格 立即切换 · t 测试全部节点真延迟\n切换结果由运行中内核保存", link::string(&n.outbound, "type"), link::string(&n.outbound, "server"), n.outbound["server_port"])
                     }
-                } else if tag == "auto" {
-                    "自动测速 · auto\n\n由 urltest 每 3 分钟检测节点，容差 50ms，自动选择低延迟出口。\n\nEnter / 空格 切换到自动选择".into()
                 } else {
-                    "直连 · direct\n\nPROXY 分组直接连接目标，不经过代理节点。\n\nEnter / 空格 切换到直连".into()
+                    format!("自动测速 · auto\n\n由 urltest 每 3 分钟检测节点，容差 50ms，自动选择低延迟出口。\n当前延迟：{}\n\nEnter / 空格 切换到自动选择 · t 立即测速", self.delay_text(tag))
                 }
             }
             3 => {
@@ -1204,12 +1267,17 @@ impl Ui {
                 }
                 2 => {
                     let nodes = self.app.state.all_nodes();
-                    let marker = |tag: &str| if self.selected == tag { "●" } else { " " };
+                    let marker = |tag: &str| if self.selected == tag { "● " } else { "  " };
+                    let testing = self.testing.is_some_and(|t| t.elapsed() < TESTING);
+                    let dim = Style::default().fg(Color::DarkGray);
                     if !nodes.is_empty() {
-                        items.push(ListItem::new(format!(
-                            "{} auto  自动测速，选择低延迟节点",
-                            marker("auto")
-                        )));
+                        items.push(ListItem::new(Line::from(vec![
+                            Span::raw(marker("auto")),
+                            Span::styled("自动", Style::default().fg(ACCENT)),
+                            Span::raw(" auto  "),
+                            delay_span(&self.delays, "auto", testing),
+                            Span::styled("  自动测速，选择低延迟节点", dim),
+                        ])));
                     }
                     let manual = self
                         .app
@@ -1219,20 +1287,29 @@ impl Ui {
                         .filter(|n| n.outbound.is_object())
                         .count();
                     for (i, n) in nodes.iter().enumerate() {
-                        items.push(ListItem::new(format!(
-                            "{} {}  [{}] {}  {}",
-                            marker(&n.tag),
-                            n.tag,
-                            if i < manual { "手动" } else { "订阅" },
-                            link::string(&n.outbound, "type"),
-                            link::string(&n.outbound, "server")
-                        )));
-                    }
-                    if !nodes.is_empty() {
-                        items.push(ListItem::new(format!(
-                            "{} direct  直接连接",
-                            marker("direct")
-                        )));
+                        let country = link::country(&n.tag);
+                        items.push(ListItem::new(Line::from(vec![
+                            Span::raw(marker(&n.tag)),
+                            Span::styled(
+                                format!("{:<4}", country.unwrap_or("--")),
+                                if country.is_some() {
+                                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                                } else {
+                                    dim
+                                },
+                            ),
+                            Span::raw(format!(" {}  ", display_name(&n.tag))),
+                            delay_span(&self.delays, &n.tag, testing),
+                            Span::styled(
+                                format!(
+                                    "  [{}] {}  {}",
+                                    if i < manual { "手动" } else { "订阅" },
+                                    link::string(&n.outbound, "type"),
+                                    link::string(&n.outbound, "server")
+                                ),
+                                dim,
+                            ),
+                        ])));
                     }
                 }
                 3 => {
@@ -1302,7 +1379,7 @@ impl Ui {
         }
         let hint = match self.tab {
             1 => "a 添加 · Enter/u 更新 · U 全部更新 · x 删除 · / 搜索 · ? 帮助 · q 退出",
-            2 => "a 添加 · Enter 切换出口 · x 删除 · / 搜索 · r 应用配置 · ? 帮助 · q 退出",
+            2 => "a 添加 · Enter 切换出口 · t 测速 · x 删除 · / 搜索 · r 应用 · ? 帮助 · q 退出",
             3 => "Enter/空格 轮转 · e 编辑 · / 搜索 · r 应用配置 · ? 帮助 · q 退出",
             _ => "1–4/Tab 页签 · s 启停 · r 应用配置 · g 校验配置 · ? 帮助 · q 退出",
         };
@@ -1451,7 +1528,7 @@ mod tests {
         press(&mut ui, KeyCode::Enter);
         assert!(ui.job.is_none());
         press(&mut ui, KeyCode::Esc);
-        assert_eq!(ui.len(2), 5);
+        assert_eq!(ui.len(2), 4); // auto + three nodes; direct is not listed.
 
         ui.tab = 3;
         ui.query[3] = "mixed_port".into();

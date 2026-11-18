@@ -322,3 +322,14 @@ fn invalid_or_reused_pid_files_never_target_unrelated_processes() {
     assert!(a.stop().is_err());
     assert!(ssb::platform::process_info(std::process::id()).is_some());
 }
+
+#[test]
+fn group_show_rows_yield_url_test_delays() {
+    let delays = core::parse_delays(
+        "Tag:       PROXY\nType:      selector\nSelected:  auto\nauto\turltest\t16 ms\n香港 01\tvless\t\x1b[32m123 ms\x1b[0m\nn2\tsocks\t-\ndirect\tdirect\t13 ms\n",
+    );
+    assert_eq!(delays.get("auto"), Some(&16));
+    assert_eq!(delays.get("香港 01"), Some(&123));
+    assert_eq!(delays.get("n2"), None);
+    assert_eq!(delays.len(), 3);
+}

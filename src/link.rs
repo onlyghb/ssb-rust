@@ -435,3 +435,146 @@ pub fn parse_mixed(text: &str) -> (Vec<Node>, Vec<String>) {
     }
     (nodes, errors)
 }
+
+// Longer keywords win, so 印度尼西亚 is not read as 印度 and 澳门 not as 澳洲.
+const COUNTRIES: &[(&str, &[&str])] = &[
+    ("HK", &["香港", "hong kong", "hongkong"]),
+    (
+        "TW",
+        &["台湾", "臺灣", "台北", "新北", "彰化", "taiwan", "taipei"],
+    ),
+    ("MO", &["澳门", "澳門", "macau", "macao"]),
+    ("CN", &["中国", "回国", "china"]),
+    (
+        "JP",
+        &["日本", "东京", "東京", "大阪", "japan", "tokyo", "osaka"],
+    ),
+    ("KR", &["韩国", "韓國", "首尔", "春川", "korea", "seoul"]),
+    ("SG", &["新加坡", "狮城", "singapore"]),
+    (
+        "US",
+        &[
+            "美国",
+            "美國",
+            "洛杉矶",
+            "硅谷",
+            "纽约",
+            "西雅图",
+            "圣何塞",
+            "芝加哥",
+            "达拉斯",
+            "凤凰城",
+            "united states",
+            "america",
+            "los angeles",
+            "san jose",
+            "seattle",
+            "new york",
+            "chicago",
+            "dallas",
+        ],
+    ),
+    (
+        "CA",
+        &[
+            "加拿大",
+            "多伦多",
+            "温哥华",
+            "canada",
+            "toronto",
+            "vancouver",
+        ],
+    ),
+    (
+        "GB",
+        &[
+            "英国",
+            "英國",
+            "伦敦",
+            "united kingdom",
+            "britain",
+            "london",
+        ],
+    ),
+    ("DE", &["德国", "德國", "法兰克福", "germany", "frankfurt"]),
+    ("FR", &["法国", "法國", "巴黎", "france", "paris"]),
+    (
+        "NL",
+        &["荷兰", "荷蘭", "阿姆斯特丹", "netherlands", "amsterdam"],
+    ),
+    ("RU", &["俄罗斯", "俄羅斯", "莫斯科", "russia", "moscow"]),
+    ("AU", &["澳大利亚", "澳洲", "悉尼", "australia", "sydney"]),
+    ("NZ", &["新西兰", "new zealand"]),
+    ("IN", &["印度", "孟买", "india", "mumbai"]),
+    (
+        "ID",
+        &["印度尼西亚", "印尼", "雅加达", "indonesia", "jakarta"],
+    ),
+    ("MY", &["马来西亚", "吉隆坡", "malaysia", "kuala lumpur"]),
+    ("TH", &["泰国", "曼谷", "thailand", "bangkok"]),
+    ("VN", &["越南", "vietnam"]),
+    ("PH", &["菲律宾", "马尼拉", "philippines", "manila"]),
+    ("TR", &["土耳其", "伊斯坦布尔", "turkey", "istanbul"]),
+    ("AE", &["阿联酋", "迪拜", "dubai", "emirates"]),
+    ("IL", &["以色列", "israel"]),
+    ("IT", &["意大利", "米兰", "italy", "milan"]),
+    ("ES", &["西班牙", "马德里", "spain", "madrid"]),
+    ("CH", &["瑞士", "苏黎世", "switzerland", "zurich"]),
+    ("SE", &["瑞典", "斯德哥尔摩", "sweden", "stockholm"]),
+    ("NO", &["挪威", "norway"]),
+    ("FI", &["芬兰", "finland", "helsinki"]),
+    ("PL", &["波兰", "华沙", "poland", "warsaw"]),
+    ("UA", &["乌克兰", "ukraine"]),
+    ("IE", &["爱尔兰", "ireland", "dublin"]),
+    ("BR", &["巴西", "圣保罗", "brazil", "sao paulo"]),
+    ("AR", &["阿根廷", "argentina"]),
+    ("MX", &["墨西哥", "mexico"]),
+    ("CL", &["智利", "chile"]),
+    ("ZA", &["南非", "south africa"]),
+    ("EG", &["埃及", "egypt"]),
+    ("KZ", &["哈萨克斯坦", "kazakhstan"]),
+    ("PK", &["巴基斯坦", "pakistan"]),
+    ("BD", &["孟加拉", "bangladesh"]),
+    ("KH", &["柬埔寨", "cambodia"]),
+    ("MN", &["蒙古", "mongolia"]),
+];
+
+/// Best-effort ISO 3166 alpha-2 code for a node name: a flag emoji wins, then
+/// Chinese/English place names, then a standalone upper-case code such as `HK`.
+pub fn country(name: &str) -> Option<&'static str> {
+    let code = |s: &str| {
+        let s = match s {
+            "UK" => "GB",
+            "USA" => "US",
+            _ => s,
+        };
+        COUNTRIES.iter().map(|(c, _)| *c).find(|c| *c == s)
+    };
+    let indicators: Vec<char> = name
+        .chars()
+        .filter(|c| ('\u{1F1E6}'..='\u{1F1FF}').contains(c))
+        .take(2)
+        .collect();
+    if let [a, b] = indicators[..] {
+        let letter = |c: char| char::from(b'A' + (c as u32 - 0x1F1E6) as u8);
+        let flag: String = [letter(a), letter(b)].iter().collect();
+        // Many providers label Taiwan nodes with the CN flag; trust the name then.
+        if flag != "CN" || !name.contains('台') {
+            if let Some(c) = code(&flag) {
+                return Some(c);
+            }
+        }
+    }
+    let lower = name.to_lowercase();
+    if let Some((c, _)) = COUNTRIES
+        .iter()
+        .flat_map(|(c, words)| words.iter().map(move |w| (*c, *w)))
+        .filter(|(_, w)| lower.contains(w))
+        .max_by_key(|(_, w)| w.chars().count())
+    {
+        return Some(c);
+    }
+    name.split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|w| (2..=3).contains(&w.len()) && w.chars().all(|c| c.is_ascii_uppercase()))
+        .find_map(code)
+}
