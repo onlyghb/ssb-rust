@@ -74,10 +74,18 @@ impl App {
         bytes.push(b'\n');
         tmp.write_all(&bytes)?;
         tmp.as_file().sync_all()?;
-        let warning = match core::locate(&self.dirs, &self.state.settings) {
+        let mut notes = vec![match core::locate(&self.dirs, &self.state.settings) {
             Ok(bin) => core::check(&bin, tmp.path())?,
             Err(e) => format!("未找到 sing-box，本次跳过配置校验（{e}）"),
-        };
+        }];
+        notes.retain(|n| !n.is_empty());
+        notes.extend(
+            self.state
+                .risks()
+                .into_iter()
+                .map(|r| format!("安全提醒：{r}")),
+        );
+        let warning = notes.join("；");
         if self.dirs.config().exists() {
             let old = fs::read(self.dirs.config())?;
             crate::profile::atomic_write(&self.dirs.backup(), &old, false)?;

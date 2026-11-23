@@ -97,12 +97,13 @@ ssb version | help                      版本与帮助
 - 国内 DNS 使用 IP 地址；代理 DNS 支持 IP、域名或完整 HTTPS DoH URL。
 - IPv6 可选 `auto` / `on` / `off`；`auto` 按系统能力探测。关闭或降级时，TUN 阻断 IPv6，显式代理也拒绝 IPv6 目标连接。
 - TUN 开启严格路由；无法安装所需路由或阻断规则时拒绝启动。例外：Linux 内核未启用 IPv6（如引导参数 `ipv6.disable=1`）时不存在可绕过的 IPv6 流量，内核也会拒绝 IPv6 阻断规则，此时省略严格路由。
-- 规则集默认从 jsDelivr 直连下载，可切换 GitHub 源或设置镜像前缀。
-- 开启网页面板：`ssb settings set dashboard_off false`，重启后运行 `ssb dashboard` 获取地址和密钥。
+- 规则集默认从 jsDelivr 直连下载，可切换 GitHub 源或设置镜像前缀。镜像前缀须以 `https://` 开头；经镜像下载内核时按 GitHub API 提供的 SHA-256 校验，无法校验则拒绝。规则集和面板由内核下载、无法校验，请只用可信镜像。
+- 开启网页面板：`ssb settings set dashboard_off false`，重启后运行 `ssb dashboard` 获取地址和密钥。API 默认只监听本机；改为其他地址时，密钥经明文 HTTP 传输。
+- `gen` 和 `doctor` 会提示未校验证书或未加密的节点、明文 HTTP 订阅、不限本机的 API 监听和镜像风险；订阅不允许从 HTTPS 重定向到 HTTP。
 
 默认数据目录为可执行文件所在目录，可用 `--dir <目录>` 或 `SSB_DIR` 指定。
 升级时替换可执行文件，保留 `data/`；配置上一版备份为 `data/config.json.bak`，日志位于 `logs/`。
-`data/state.json` 包含节点凭据、订阅地址和 API 密钥，请妥善保管。
+`data/state.json` 包含节点凭据、订阅地址和 API 密钥，请妥善保管。Linux 下 `data/`、`logs/`、`run/` 仅所有者可访问（`cache.db` 含 DNS 缓存），API 密钥经环境变量而非命令行传给内核。
 
 ## 从源码构建
 

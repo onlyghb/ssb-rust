@@ -20,7 +20,10 @@ pub fn fetch(url: &str) -> Result<SubscriptionResult> {
     if !matches!(parsed.scheme(), "http" | "https") {
         bail!("订阅仅支持 HTTP/HTTPS");
     }
-    let client = Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(crate::core::redirect_policy())
+        .build()?;
     let mut last = anyhow::anyhow!("订阅内容为空");
     let mut userinfo = None;
     for ua in [

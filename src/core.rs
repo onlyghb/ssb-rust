@@ -143,11 +143,47 @@ pub fn asset_suffix(os: &str, arch: &str) -> String {
         if os == "windows" { ".zip" } else { ".tar.gz" }
     )
 }
+/// Follows at most 10 redirects and never from HTTPS to plain HTTP, where a
+/// network attacker could substitute the content.
+pub fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            attempt.error("重定向次数过多")
+        } else if attempt.url().scheme() != "https"
+            && attempt.previous().iter().any(|u| u.scheme() == "https")
+        {
+            attempt.error("拒绝从 HTTPS 重定向到明文 HTTP")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+/// Checks an archive against the GitHub API digest, which is fetched
+/// directly rather than through the mirror. A mirror is used only when its
+/// download can be checked; GitHub itself is trusted through TLS.
+pub fn verify_digest(bytes: &[u8], digest: Option<&str>, mirror: &str) -> Result<()> {
+    let Some(expected) = digest.and_then(|d| d.strip_prefix("sha256:")) else {
+        if mirror.is_empty() {
+            return Ok(());
+        }
+        bail!("GitHub 未提供该资产的 SHA-256，无法校验镜像下载；请清空镜像前缀后重试");
+    };
+    let actual: String = ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if !actual.eq_ignore_ascii_case(expected) {
+        bail!("内核压缩包 SHA-256 不匹配（期望 {expected}，实际 {actual}），已拒绝安装");
+    }
+    Ok(())
+}
 pub fn download(d: &Dirs, mirror: &str) -> Result<String> {
     d.ensure()?;
     let client = Client::builder()
         .timeout(Duration::from_secs(600))
         .user_agent("ssb-rust")
+        .redirect(redirect_policy())
         .build()?;
     let release: Value = client
         .get("https://api.github.com/repos/SagerNet/sing-box/releases/latest")
@@ -159,13 +195,15 @@ pub fn download(d: &Dirs, mirror: &str) -> Result<String> {
         .as_str()
         .context("GitHub release 缺少版本号")?;
     let suffix = asset_suffix(std::env::consts::OS, std::env::consts::ARCH);
-    let url = release["assets"]
+    let asset = release["assets"]
         .as_array()
         .context("GitHub release 缺少资产列表")?
         .iter()
         .find(|a| a["name"].as_str().is_some_and(|n| n.ends_with(&suffix)))
-        .and_then(|a| a["browser_download_url"].as_str())
         .with_context(|| format!("release {tag} 中未找到 *{suffix} 资产"))?;
+    let url = asset["browser_download_url"]
+        .as_str()
+        .context("GitHub release 资产缺少下载地址")?;
     let resp = client
         .get(format!("{mirror}{url}"))
         .send()?
@@ -175,6 +213,7 @@ pub fn download(d: &Dirs, mirror: &str) -> Result<String> {
     if bytes.len() > 256 << 20 {
         bail!("内核压缩包超过 256 MiB 限制");
     }
+    verify_digest(&bytes, asset["digest"].as_str(), mirror)?;
     extract_archive(d, &bytes, suffix.ends_with(".zip"))?;
     Ok(tag.into())
 }
@@ -403,14 +442,14 @@ pub fn api_alive(listen: &str) -> bool {
 }
 pub fn api_output(bin: &Path, s: &Settings, args: &[&str]) -> Result<String> {
     let mut cmd = Command::new(bin);
+    // Other local users can read a process's argv but not its environment.
     cmd.args([
         "api",
         "--url",
         &format!("http://{}", api_address(&s.api_listen)),
-        "--secret",
-        &s.api_secret,
     ])
-    .args(args);
+    .args(args)
+    .env("BOX_API_SECRET", &s.api_secret);
     command_output(cmd, Duration::from_secs(8)).context("sing-box API 调用失败")
 }
 pub fn parse_selected(out: &str) -> String {
@@ -545,6 +584,16 @@ pub fn doctor(d: &Dirs, st: &State) -> Vec<CheckResult> {
             "127.0.0.53 存根；若解析异常可手动设置 DNSStubListener=no".into(),
         );
     }
+    let risks = st.risks();
+    add(
+        "安全",
+        risks.is_empty(),
+        if risks.is_empty() {
+            "未发现未加密/未校验证书的节点、明文订阅、对外 API 或镜像风险".into()
+        } else {
+            risks.join("；")
+        },
+    );
     let mut ports = vec![("API 端口", st.settings.api_listen.clone())];
     if st.settings.mixed_enabled || !st.settings.tun_enabled {
         ports.push((

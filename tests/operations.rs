@@ -159,6 +159,62 @@ fn removing_disambiguated_manual_nodes_preserves_subscriptions() {
     assert_eq!(a.state.subscriptions[0].nodes.len(), 1);
 }
 #[test]
+fn core_downloads_are_checked_against_the_github_digest() {
+    // SHA-256 of "abc".
+    let digest = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    for mirror in ["", "https://mirror.test/"] {
+        core::verify_digest(b"abc", Some(digest), mirror).unwrap();
+        let upper = digest.to_uppercase().replace("SHA256:", "sha256:");
+        core::verify_digest(b"abc", Some(&upper), mirror).unwrap();
+        let error = core::verify_digest(b"abd", Some(digest), mirror).unwrap_err();
+        assert!(error.to_string().contains("SHA-256 不匹配"));
+    }
+    // Without a digest only a direct GitHub download (trusted via TLS) proceeds.
+    core::verify_digest(b"abc", None, "").unwrap();
+    core::verify_digest(b"abc", Some("sha512:00"), "").unwrap();
+    assert!(core::verify_digest(b"abc", None, "https://mirror.test/").is_err());
+    assert!(core::verify_digest(b"abc", Some("sha512:00"), "https://mirror.test/").is_err());
+}
+#[cfg(unix)]
+#[test]
+fn data_log_and_run_directories_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let d = profile::Dirs::new(tmp.path()).unwrap();
+    for dir in ["data", "logs", "run"] {
+        std::fs::create_dir(tmp.path().join(dir)).unwrap();
+        std::fs::set_permissions(tmp.path().join(dir), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
+    d.ensure().unwrap();
+    for dir in ["data", "logs", "run"] {
+        let mode = std::fs::metadata(tmp.path().join(dir))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "{dir}");
+    }
+}
+#[cfg(unix)]
+#[test]
+fn api_secret_reaches_the_core_through_the_environment_only() {
+    let _process_guard = PROCESS_FIXTURE_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let mut a = App::open(tmp.path()).unwrap();
+    let bin = fake_core(
+        &mut a,
+        "#!/bin/sh\necho \"args:$*\"\necho \"env:$BOX_API_SECRET\"\n",
+    );
+    a.state.settings.api_secret = "s3cret-value".into();
+    let out = core::api_output(&bin, &a.state.settings, &["group", "show", "PROXY"]).unwrap();
+    assert!(out.contains("env:s3cret-value"), "{out}");
+    let args = out.lines().find(|l| l.starts_with("args:")).unwrap();
+    assert_eq!(
+        args,
+        "args:api --url http://127.0.0.1:9090 group show PROXY"
+    );
+}
+#[test]
 fn core_api_parser_and_asset_names() {
     assert_eq!(core::asset_suffix("linux", "x86_64"), "-linux-amd64.tar.gz");
     assert_eq!(

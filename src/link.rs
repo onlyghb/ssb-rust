@@ -412,6 +412,25 @@ pub fn nonempty(s: String, default: &str) -> String {
     }
 }
 
+/// Why an outbound exposes traffic to on-path observers, if it does: TLS
+/// certificate checks disabled, or no transport encryption at all.
+pub fn risk(o: &Value) -> Option<&'static str> {
+    let tls = o["tls"]["enabled"] == true;
+    if tls && o["tls"]["insecure"] == true {
+        return Some("未校验 TLS 证书，可被中间人截获");
+    }
+    let plain = match string(o, "type").as_str() {
+        "vless" | "trojan" | "socks" | "http" => !tls,
+        "vmess" => !tls && matches!(string(o, "security").as_str(), "none" | "zero"),
+        "shadowsocks" => {
+            matches!(string(o, "method").as_str(), "none" | "plain")
+                && !string(o, "plugin_opts").split(';').any(|p| p == "tls")
+        }
+        _ => false,
+    };
+    plain.then_some("未加密，内容与目标对链路可见")
+}
+
 pub fn parse_mixed(text: &str) -> (Vec<Node>, Vec<String>) {
     let decoded;
     let text = if !text.contains("://") {

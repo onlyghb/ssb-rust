@@ -270,6 +270,83 @@ fn strict_route_drops_ipv6_block_only_when_linux_kernel_lacks_ipv6() {
     }
 }
 #[test]
+fn insecure_and_plaintext_nodes_are_reported() {
+    let insecure = Some("未校验 TLS 证书，可被中间人截获");
+    let plain = Some("未加密，内容与目标对链路可见");
+    for (raw, expected) in [
+        ("trojan://p@a.test:443?allowInsecure=1#t", insecure),
+        ("hy2://p@a.test:443?insecure=1#h", insecure),
+        ("vless://u@a.test:443?security=tls#v", None),
+        ("vless://u@a.test:443?security=reality&pbk=k&sid=1#r", None),
+        ("vless://u@a.test:80#bare", plain),
+        ("trojan://p@a.test:80?security=none#t", plain),
+        ("ss://none:p@a.test:8388#ss", plain),
+        ("ss://aes-128-gcm:p@a.test:8388#ss", None),
+    ] {
+        assert_eq!(link::risk(&node(raw)), expected, "{raw}");
+    }
+    let vmess = |extra: &str| {
+        let json = format!(r#"{{"add":"a.test","port":"443","id":"u","ps":"m"{extra}}}"#);
+        node(&format!("vmess://{}", b64::STANDARD.encode(json)))
+    };
+    assert_eq!(link::risk(&vmess("")), None); // VMess encrypts by itself.
+    assert_eq!(link::risk(&vmess(r#","scy":"none""#)), plain);
+    assert_eq!(link::risk(&vmess(r#","scy":"none","tls":"tls""#)), None);
+    let clash = subscription::convert_clash(&json!({"name":"c","type":"trojan","server":"a.test","port":443,"password":"p","skip-cert-verify":true})).unwrap();
+    assert_eq!(link::risk(&clash.outbound), insecure);
+    assert_eq!(
+        link::risk(&json!({"type":"socks","server":"a.test","server_port":1080})),
+        plain
+    );
+}
+#[test]
+fn state_risks_cover_nodes_subscriptions_api_and_mirrors() {
+    let mut st = State::default();
+    assert!(st.risks().is_empty());
+    for i in 0..4 {
+        st.manual_nodes
+            .push(link::parse(&format!("trojan://p@a.test:443?insecure=1#n{i}")).unwrap());
+    }
+    st.subscriptions.push(profile::Subscription {
+        name: "plain".into(),
+        url: "http://sub.test/x".into(),
+        ..Default::default()
+    });
+    st.subscriptions.push(profile::Subscription {
+        name: "tls".into(),
+        url: "https://sub.test/x".into(),
+        ..Default::default()
+    });
+    let risks = st.risks();
+    assert_eq!(risks.len(), 2, "{risks:?}");
+    assert!(risks[0].starts_with("4 个节点未校验 TLS 证书"));
+    assert!(risks[0].contains("n0、n1、n2 等"));
+    assert!(risks[1].contains("订阅 plain 使用明文 HTTP"));
+
+    let mut s = profile::Settings::default();
+    for listen in ["127.0.0.1:9090", "[::1]:9090"] {
+        profile::set_setting(&mut s, "api_listen", listen).unwrap();
+        assert!(s.risks().is_empty(), "{listen}");
+    }
+    for listen in [":9090", "0.0.0.0:9090", "192.168.1.2:9090", "[::]:9090"] {
+        profile::set_setting(&mut s, "api_listen", listen).unwrap();
+        assert!(s.risks()[0].starts_with("API 监听"), "{listen}");
+    }
+    profile::set_setting(&mut s, "api_listen", "127.0.0.1:9090").unwrap();
+    for bad in ["http://mirror.test/", "mirror.test/", "https://a b/"] {
+        assert!(profile::set_setting(&mut s, "mirror_prefix", bad).is_err());
+    }
+    profile::set_setting(&mut s, "mirror_prefix", "https://mirror.test/").unwrap();
+    // Only the core download uses it now, and that download is hash-checked.
+    assert!(s.risks().is_empty());
+    profile::set_setting(&mut s, "ruleset_source", "github").unwrap();
+    assert!(s.risks()[0].contains("规则集/面板无法校验"));
+    profile::set_setting(&mut s, "route_mode", "global").unwrap();
+    assert!(s.risks().is_empty());
+    profile::set_setting(&mut s, "dashboard_off", "false").unwrap();
+    assert_eq!(s.risks().len(), 1);
+}
+#[test]
 fn custom_routing_dns_priority_mirrors_and_explicit_download_detour() {
     let tmp = tempfile::tempdir().unwrap();
     let d = Dirs::new(tmp.path()).unwrap();

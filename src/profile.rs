@@ -172,6 +172,16 @@ impl Dirs {
         ] {
             fs::create_dir_all(p)?;
         }
+        // sing-box creates cache.db (DNS answers, FakeIP map) and ssb the log
+        // under the umask, so close the directories to other local users.
+        // Best effort: a directory another user owns is only theirs to use.
+        #[cfg(unix)]
+        for p in [self.data(), self.base.join("logs"), self.base.join("run")] {
+            use std::os::unix::fs::PermissionsExt;
+            if fs::metadata(&p).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+                let _ = fs::set_permissions(&p, fs::Permissions::from_mode(0o700));
+            }
+        }
         Ok(())
     }
 }
@@ -198,6 +208,40 @@ impl State {
     pub fn save(&self, d: &Dirs) -> Result<()> {
         d.ensure()?;
         atomic_write(&d.state(), &serde_json::to_vec_pretty(self)?, false)
+    }
+    /// Exposure the generated config cannot rule out. `gen` and `doctor`
+    /// repeat these reminders until the cause is removed.
+    pub fn risks(&self) -> Vec<String> {
+        let mut nodes: Vec<(&str, Vec<String>)> = vec![];
+        for n in self.all_nodes() {
+            if let Some(reason) = crate::link::risk(&n.outbound) {
+                match nodes.iter_mut().find(|(r, _)| *r == reason) {
+                    Some((_, tags)) => tags.push(n.tag),
+                    None => nodes.push((reason, vec![n.tag])),
+                }
+            }
+        }
+        let mut out: Vec<String> = nodes
+            .into_iter()
+            .map(|(reason, tags)| {
+                format!(
+                    "{} 个节点{reason}（{}{}）",
+                    tags.len(),
+                    tags[..tags.len().min(3)].join("、"),
+                    if tags.len() > 3 { " 等" } else { "" }
+                )
+            })
+            .collect();
+        for s in &self.subscriptions {
+            if url::Url::parse(&s.url).is_ok_and(|u| u.scheme() == "http") {
+                out.push(format!(
+                    "订阅 {} 使用明文 HTTP，节点可被链路上的人替换，请改用 HTTPS",
+                    s.name
+                ));
+            }
+        }
+        out.extend(self.settings.risks());
+        out
     }
     pub fn all_nodes(&self) -> Vec<Node> {
         // Reserve built-ins, and check suffixed names too ("x", "x #2", "x").
@@ -323,7 +367,31 @@ impl Settings {
         if prefix.parse::<u8>().context("TUN 前缀无效")? > 32 {
             bail!("TUN 前缀应为 0–32");
         }
+        if !self.mirror_prefix.is_empty()
+            && (!self.mirror_prefix.starts_with("https://")
+                || self.mirror_prefix.chars().any(char::is_whitespace))
+        {
+            bail!("镜像前缀应以 https:// 开头（明文 HTTP 下内核、规则集和面板可被篡改）");
+        }
         Ok(())
+    }
+    pub fn risks(&self) -> Vec<String> {
+        let mut out = vec![];
+        if split_listen(&self.api_listen).is_ok_and(|a| !a.ip().is_loopback()) {
+            out.push(format!(
+                "API 监听 {} 不限本机，明文 HTTP 的 secret 可被局域网嗅探并用于切换出口；仅本机使用请设为 127.0.0.1:端口",
+                self.api_listen
+            ));
+        }
+        let mirrored =
+            !self.dashboard_off || (self.route_mode != "global" && self.ruleset_source == "github");
+        if !self.mirror_prefix.is_empty() && mirrored {
+            out.push(format!(
+                "镜像 {} 提供的规则集/面板无法校验，被篡改可让指定域名直连或窃取 API secret；仅使用可信镜像",
+                self.mirror_prefix
+            ));
+        }
+        out
     }
 }
 
