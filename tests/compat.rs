@@ -236,6 +236,40 @@ fn config_capabilities_matrix_covers_ipv6_modes_dashboard_and_routes() {
     }
 }
 #[test]
+fn strict_route_drops_ipv6_block_only_when_linux_kernel_lacks_ipv6() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = Dirs::new(tmp.path()).unwrap();
+    let mut st = State::default();
+    st.manual_nodes
+        .push(link::parse("trojan://p@proxy.test:443#test").unwrap());
+    for ipv6 in ["auto", "on", "off"] {
+        st.settings.ipv6 = ipv6.into();
+        for auto_redirect in [false, true] {
+            st.settings.auto_redirect = auto_redirect;
+            for (ipv6_absent, linux) in [(true, true), (false, true), (true, false)] {
+                let host = render::Host {
+                    ipv6: false,
+                    ipv6_absent,
+                    linux,
+                };
+                let cfg = render::build_host(&st, &d, host).unwrap();
+                let tun = &cfg["inbounds"][0];
+                assert_eq!(tun["type"], "tun");
+                // "on" keeps an IPv6 TUN address, which fails visibly instead.
+                let strict = ipv6 == "on" || !(ipv6_absent && linux);
+                assert_eq!(tun["strict_route"], strict, "{ipv6} {host:?}");
+                if ipv6 != "on" {
+                    assert_eq!(tun["address"], json!(["10.255.0.1/30"]));
+                    assert_eq!(
+                        cfg["route"]["rules"][0],
+                        json!({"ip_version":6,"action":"reject"})
+                    );
+                }
+            }
+        }
+    }
+}
+#[test]
 fn custom_routing_dns_priority_mirrors_and_explicit_download_detour() {
     let tmp = tempfile::tempdir().unwrap();
     let d = Dirs::new(tmp.path()).unwrap();

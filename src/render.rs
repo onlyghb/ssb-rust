@@ -56,12 +56,48 @@ fn custom_rule(domains: &[String], key: &str, value: &str) -> Value {
     r
 }
 
-pub fn build(st: &State, d: &Dirs) -> Result<Value> {
-    build_for(st, d, platform::host_has_ipv6(), cfg!(target_os = "linux"))
+/// Host capabilities the config depends on. Explicit values make config tests
+/// independent of the host and permit checking Windows output from Linux
+/// without changing process-global state.
+#[derive(Debug, Clone, Copy)]
+pub struct Host {
+    /// IPv6 is usable; `ipv6 = auto` follows it.
+    pub ipv6: bool,
+    /// The kernel has no IPv6 stack at all (see `platform::ipv6_stack_absent`).
+    pub ipv6_absent: bool,
+    pub linux: bool,
 }
-// Explicit capabilities make config tests independent of the host and permit
-// checking Windows output from Linux without changing process-global state.
+impl Host {
+    pub fn detect() -> Self {
+        Self {
+            ipv6: platform::host_has_ipv6(),
+            ipv6_absent: platform::ipv6_stack_absent(),
+            linux: cfg!(target_os = "linux"),
+        }
+    }
+}
+
+pub fn build(st: &State, d: &Dirs) -> Result<Value> {
+    build_host(st, d, Host::detect())
+}
+/// A host whose kernel has an IPv6 stack, usable or not.
 pub fn build_for(st: &State, d: &Dirs, host_ipv6: bool, linux: bool) -> Result<Value> {
+    build_host(
+        st,
+        d,
+        Host {
+            ipv6: host_ipv6,
+            ipv6_absent: false,
+            linux,
+        },
+    )
+}
+pub fn build_host(st: &State, d: &Dirs, host: Host) -> Result<Value> {
+    let Host {
+        ipv6: host_ipv6,
+        ipv6_absent,
+        linux,
+    } = host;
     let s = &st.settings;
     s.validate()?;
     let v6 = match s.ipv6.as_str() {
@@ -141,7 +177,12 @@ pub fn build_for(st: &State, d: &Dirs, host_ipv6: bool, linux: bool) -> Result<V
         // With no IPv6 TUN address, strict_route installs an IPv6 unreachable
         // rule on Linux / a blocking WFP filter on Windows. Keep it enabled
         // independently of DNS/IPv6 preferences; AAAA filtering is not a firewall.
-        let mut tun = json!({"type":"tun","tag":"tun-in","address":addresses,"mtu":9000,"auto_route":true,"strict_route":true,"stack":"mixed"});
+        // On Linux that rule (an nftables reject with auto_redirect) is all
+        // strict_route adds. A kernel without an IPv6 stack refuses it with
+        // EAFNOSUPPORT, failing startup up to sing-box 1.14.4, and cannot carry
+        // IPv6 at all, so there is nothing to block there.
+        let strict = !(linux && !v6 && ipv6_absent);
+        let mut tun = json!({"type":"tun","tag":"tun-in","address":addresses,"mtu":9000,"auto_route":true,"strict_route":strict,"stack":"mixed"});
         if !v6 {
             tun["route_address"] = json!(["0.0.0.0/0"]);
         }

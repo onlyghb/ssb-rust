@@ -230,6 +230,26 @@ pub fn host_has_ipv6() -> bool {
     }
 }
 
+/// True only when the kernel has no IPv6 stack at all (booted with
+/// `ipv6.disable=1` or built without IPv6): no IPv6 packet can be sent, and
+/// IPv6 policy rules fail with EAFNOSUPPORT. The `disable_ipv6` sysctl keeps
+/// AF_INET6 sockets and rules working, so it never counts; probe errors count
+/// as a present stack.
+#[cfg(target_os = "linux")]
+pub fn ipv6_stack_absent() -> bool {
+    let fd = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if fd >= 0 {
+        unsafe { libc::close(fd) };
+        return false;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EAFNOSUPPORT)
+        && ipv6_rule_supported() == 0
+}
+#[cfg(not(target_os = "linux"))]
+pub fn ipv6_stack_absent() -> bool {
+    false
+}
+
 #[cfg(target_os = "linux")]
 pub fn ipv6_rule_supported() -> i8 {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};

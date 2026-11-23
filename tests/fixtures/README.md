@@ -15,7 +15,7 @@
 
 - FakeIP 关闭时增加 `dns.reverse_mapping: true`，让真实 IP 路由可恢复域名。
 - 自定义强制代理域名的 FakeIP 规则限制为 A/AAAA 查询，并追加代理 DoH 规则处理其他查询类型。
-- TUN 始终开启 `strict_route`；IPv6 关闭或自动降级时，在业务路由前拒绝 IPv6 连接。
+- TUN 开启 `strict_route`（仅 Linux 内核未启用 IPv6 时省略）；IPv6 关闭或自动降级时，在业务路由前拒绝 IPv6 连接。
 - 无节点时，在其他分流之前拒绝所有连接和 DNS 查询；ssb 同时禁止启动内核。
 
 其他配置字段仍做完整比较，修复行为另由配置测试覆盖。

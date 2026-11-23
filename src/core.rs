@@ -360,7 +360,7 @@ pub fn stop(d: &Dirs) -> Result<()> {
 fn start_hint(log: &str, bin: &Path) -> String {
     let l = log.to_lowercase();
     if l.contains("address family not supported") {
-        "\n提示：系统无法安装所需的 IPv6 路由或阻断规则。请检查 IPv6/策略路由支持；为避免绕过代理，不会自动关闭严格路由。也可关闭 TUN，仅使用显式应用代理。".into()
+        "\n提示：系统无法安装所需的 IPv6 路由或阻断规则。IPv6=on 时请改为 auto/off；否则请检查策略路由支持（内核仍有 IPv6 时，为避免绕过代理不会关闭严格路由）。也可关闭 TUN，仅使用显式应用代理。".into()
     } else if l.contains("address already in use") || l.contains("only one usage of each socket") {
         format!("\n提示：端口被占用，运行 {SELF} doctor 检查，或更改 mixed/API 端口。")
     } else if l.contains("operation not permitted")
@@ -517,13 +517,19 @@ pub fn doctor(d: &Dirs, st: &State) -> Vec<CheckResult> {
         );
         let mode = st.settings.ipv6.as_str();
         let supported = platform::host_has_ipv6();
+        let absent = platform::ipv6_stack_absent();
         add(
             "IPv6",
             mode != "on" || supported,
-            if mode == "off" {
+            if absent && mode != "on" {
+                "内核未启用 IPv6（如 ipv6.disable=1），不存在 IPv6 流量；TUN 省略 IPv6 阻断规则"
+                    .into()
+            } else if mode == "off" {
                 "off：使用 IPv4，拒绝 IPv6 连接".into()
             } else if supported {
                 format!("IPv6 可用（{mode}）")
+            } else if absent {
+                "内核未启用 IPv6，请改用 auto/off".into()
             } else if mode == "on" {
                 "IPv6 不可用；使用 auto/off 时，TUN 仍要求系统支持 IPv6 阻断规则".into()
             } else {
